@@ -17,8 +17,8 @@ from telegram.ext import (
     Application, MessageHandler, CommandHandler, filters, ContextTypes
 )
 
-BOT_TOKEN = os.environ.get("8814820902:AAGZ2deTEqUvR_w7AhRzapy8Zb6uTz838JA", "")
-SOCIALDATA_KEY = os.environ.get("7707|7xmShcTAUFpCGzVQNbqGIVLSEuRnX3Yo6GXI0qNp0d9f4fb0", "")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+SOCIALDATA_KEY = os.environ.get("SOCIALDATA_API_KEY", "")
 
 TWEET_RE = re.compile(r"(?:twitter\.com|x\.com)/[^/\s]+/status/(\d+)")
 

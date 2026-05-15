@@ -1,101 +1,57 @@
 """
-Telegram bot that returns public engagement metrics for a tweet/X post.
+Telegram bot that returns full engagement metrics for any tweet/X post
+using the SocialData API (https://socialdata.tools).
 
-No Twitter API key needed — uses cdn.syndication.twimg.com (the same
-endpoint that powers tweet embeds on third-party sites).
-
-Setup:
-  1. pip install python-telegram-bot httpx
-  2. Get a bot token from @BotFather on Telegram
-  3. Paste it into BOT_TOKEN below
-  4. python twitter_stats_bot.py
+Setup on Railway:
+  1. Add env var: TELEGRAM_BOT_TOKEN = your BotFather token
+  2. Add env var: SOCIALDATA_API_KEY = your SocialData key
+  3. Start command: python3 bot.py
+  4. requirements.txt should contain: python-telegram-bot, httpx
 """
 
+import os
 import re
-import math
 import httpx
 from telegram import Update
 from telegram.ext import (
     Application, MessageHandler, CommandHandler, filters, ContextTypes
 )
 
-BOT_TOKEN = "8814820902:AAGZ2deTEqUvR_w7AhRzapy8Zb6uTz838JA"
+BOT_TOKEN = os.environ.get("8814820902:AAGZ2deTEqUvR_w7AhRzapy8Zb6uTz838JA", "")
+SOCIALDATA_KEY = os.environ.get("7707|7xmShcTAUFpCGzVQNbqGIVLSEuRnX3Yo6GXI0qNp0d9f4fb0", "")
 
 TWEET_RE = re.compile(r"(?:twitter\.com|x\.com)/[^/\s]+/status/(\d+)")
-BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
-
-
-def _to_base36(n: float) -> str:
-    """Mimics JS Number.prototype.toString(36) for floats."""
-    if n == 0:
-        return "0"
-    int_part = int(n)
-    frac = n - int_part
-
-    if int_part == 0:
-        int_str = "0"
-    else:
-        int_str = ""
-        x = int_part
-        while x > 0:
-            int_str = BASE36[x % 36] + int_str
-            x //= 36
-
-    frac_str = ""
-    if frac > 0:
-        frac_str = "."
-        for _ in range(12):
-            frac *= 36
-            d = int(frac)
-            frac_str += BASE36[d]
-            frac -= d
-            if frac == 0:
-                break
-    return int_str + frac_str
-
-
-def make_token(tweet_id: str) -> str:
-    """Token algorithm Twitter uses for the public syndication endpoint."""
-    n = int(tweet_id) / 1e15 * math.pi
-    return re.sub(r"[0.]", "", _to_base36(n))
 
 
 async def fetch_tweet(tweet_id: str):
-    token = make_token(tweet_id)
-    url = (
-        f"https://cdn.syndication.twimg.com/tweet-result"
-        f"?id={tweet_id}&token={token}&lang=en"
-    )
-    headers = {"User-Agent": "Mozilla/5.0"}
-    async with httpx.AsyncClient(timeout=15, headers=headers) as client:
-        r = await client.get(url)
+    url = f"https://api.socialdata.tools/twitter/tweets/{tweet_id}"
+    headers = {
+        "Authorization": f"Bearer {SOCIALDATA_KEY}",
+        "Accept": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url, headers=headers)
+        if r.status_code == 404:
+            return {"error": "Tweet not found (deleted or private)."}
+        if r.status_code == 402:
+            return {"error": "SocialData credits exhausted. Top up your account."}
+        if r.status_code == 401 or r.status_code == 403:
+            return {"error": "SocialData API key invalid."}
         if r.status_code != 200:
-            return None
+            return {"error": f"SocialData returned HTTP {r.status_code}."}
         try:
             return r.json()
         except Exception:
-            return None
-
-
-def extract_views(data: dict):
-    """Views/impressions live in a few possible spots depending on the tweet."""
-    for key in ("view_count_str", "view_count"):
-        if key in data and data[key]:
-            return data[key]
-    views = data.get("views")
-    if isinstance(views, dict):
-        return views.get("count") or views.get("state")
-    return None
+            return {"error": "Couldn't parse SocialData response."}
 
 
 def fmt(n):
     if n is None:
-        return "not exposed"
-    if isinstance(n, str) and n.isdigit():
-        n = int(n)
-    if isinstance(n, int):
-        return f"{n:,}"
-    return str(n)
+        return "—"
+    try:
+        return f"{int(n):,}"
+    except (ValueError, TypeError):
+        return str(n)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,45 +59,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     match = TWEET_RE.search(text)
     if not match:
         await update.message.reply_text(
-            "Send me a link to a tweet, e.g.\nhttps://x.com/user/status/123..."
+            "Send me a tweet/X link, e.g.\nhttps://x.com/user/status/123..."
         )
         return
 
     tweet_id = match.group(1)
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, action="typing"
+    )
 
     data = await fetch_tweet(tweet_id)
-    if not data:
-        await update.message.reply_text(
-            "Couldn't fetch that tweet. It may be private, deleted, "
-            "age-restricted, or the endpoint blocked the request."
-        )
+    if data.get("error"):
+        await update.message.reply_text(f"⚠️ {data['error']}")
         return
 
     author = data.get("user", {}).get("screen_name", "?")
     likes = data.get("favorite_count")
-    replies = data.get("conversation_count")
-    rts = data.get("retweet_count") or data.get("quote_count")
-    views = extract_views(data)
+    rts = data.get("retweet_count")
+    replies = data.get("reply_count")
+    quotes = data.get("quote_count")
+    views = data.get("views_count") or data.get("view_count")
+    bookmarks = data.get("bookmark_count")
 
     msg = (
-        f"📊 Stats for @{author}\n"
+        f"📊 @{author}\n"
         f"https://x.com/{author}/status/{tweet_id}\n\n"
         f"👁  Impressions: {fmt(views)}\n"
         f"❤️  Likes:        {fmt(likes)}\n"
         f"🔁  Retweets:     {fmt(rts)}\n"
-        f"💬  Replies:      {fmt(replies)}"
+        f"💬  Replies:      {fmt(replies)}\n"
+        f"💭  Quotes:       {fmt(quotes)}\n"
+        f"🔖  Bookmarks:    {fmt(bookmarks)}"
     )
     await update.message.reply_text(msg, disable_web_page_preview=True)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hi! Send me any tweet/X link and I'll return its public stats."
+        "Hi! Send me any tweet/X link and I'll return its full stats."
     )
 
 
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN env var not set.")
+    if not SOCIALDATA_KEY:
+        raise RuntimeError("SOCIALDATA_API_KEY env var not set.")
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

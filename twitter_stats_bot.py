@@ -19,7 +19,7 @@ from telegram.ext import (
     Application, MessageHandler, CommandHandler, filters, ContextTypes
 )
 
-BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8814820902:AAGZ2deTEqUvR_w7AhRzapy8Zb6uTz838JA"
 
 TWEET_RE = re.compile(r"(?:twitter\.com|x\.com)/[^/\s]+/status/(\d+)")
 BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
